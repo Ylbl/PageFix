@@ -25,8 +25,8 @@ const previewSvgRef = defineModel<SVGSVGElement | null>("svgRef");
     preserveAspectRatio="none"
   >
     <polygon
-      v-if="isPaused && polygon.length >= 3"
-      class="editable-polygon-fill"
+      v-if="polygon.length >= 3"
+      :class="isPaused ? 'editable-polygon-fill' : 'live-polygon-fill'"
       :points="polygonPointsForSvg(polygon)"
     />
     <template v-for="segment in isPaused ? polygonSegments(polygon) : []" :key="`seg-${segment.index}`">
@@ -83,6 +83,13 @@ const previewSvgRef = defineModel<SVGSVGElement | null>("svgRef");
 .editable-polygon-fill {
   fill: rgba(34, 197, 94, 0.12);
   stroke: none;
+}
+
+.live-polygon-fill {
+  fill: rgba(34, 197, 94, 0.08);
+  stroke: #22c55e;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
 }
 
 .segment-line {

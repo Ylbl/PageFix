@@ -1,5 +1,5 @@
 import { type Ref } from "vue";
-import { rectifySnapshot as apiRectifySnapshot, updatePolygonDetection } from "../api";
+import { rectifySnapshot as apiRectifySnapshot } from "../api";
 import { DEFAULT_CAPTURE_ASPECT_RATIO } from "../constants";
 import type { PolygonPoint, PostProcessMode } from "../types";
 import { clamp, clonePolygon, defaultSnapshotPolygon, normalizeError } from "../utils";
@@ -21,18 +21,6 @@ export function useRectification(
   startPreviewLoops: (fps: number) => void,
   fps: Ref<number>,
 ) {
-  async function detectPolygonForSnapshot(): Promise<PolygonPoint[]> {
-    try {
-      const polygon = await updatePolygonDetection();
-      if (Array.isArray(polygon) && polygon.length >= 4) {
-        return clonePolygon(polygon);
-      }
-    } catch {
-      // Fall back to default rectangle.
-    }
-    return defaultSnapshotPolygon();
-  }
-
   function pausePreview() {
     clearTimer();
     isPaused.value = true;
@@ -64,7 +52,13 @@ export function useRectification(
       capturedAspectRatio.value = DEFAULT_CAPTURE_ASPECT_RATIO;
       livePanZoom.resetTransform();
       capturedPanZoom.resetTransform();
-      framePolygon.value = await detectPolygonForSnapshot();
+      // Use the polygon already detected in real-time by capture_frame.
+      // If none was detected, fall back to a default rectangle.
+      if (framePolygon.value.length < 4) {
+        framePolygon.value = defaultSnapshotPolygon();
+      } else {
+        framePolygon.value = clonePolygon(framePolygon.value);
+      }
       if (isRunning.value) {
         pausePreview();
       }

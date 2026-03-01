@@ -96,7 +96,7 @@ pub(crate) fn stop_camera(state: State<CameraState>) -> Result<(), String> {
 pub(crate) fn capture_frame(state: State<CameraState>) -> Result<CaptureFrameResponse, String> {
     #[cfg(target_os = "linux")]
     {
-        let (frame_bytes, polygon) = {
+        let frame_bytes = {
             let mut guard = state
                 .current
                 .lock()
@@ -115,10 +115,17 @@ pub(crate) fn capture_frame(state: State<CameraState>) -> Result<CaptureFrameRes
                 );
             }
             session.last_frame_jpeg = frame_bytes.clone();
-            let polygon = session.last_polygon.clone().unwrap_or_default();
-            (frame_bytes, polygon)
+            frame_bytes
         };
-        let encoded = STANDARD.encode(frame_bytes);
+        // Run fast detection outside the lock so we don't block camera capture.
+        let polygon = crate::vision::detect_document_fast(&frame_bytes).unwrap_or_default();
+        // Store the detected polygon back into session state.
+        if let Ok(mut guard) = state.current.lock() {
+            if let Some(session) = guard.as_mut() {
+                session.last_polygon = Some(polygon.clone());
+            }
+        }
+        let encoded = STANDARD.encode(&frame_bytes);
         return Ok(CaptureFrameResponse {
             frame_data_url: format!("data:image/jpeg;base64,{encoded}"),
             polygon,

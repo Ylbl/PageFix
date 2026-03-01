@@ -18,91 +18,59 @@ pub(crate) fn looks_like_jpeg(bytes: &[u8]) -> bool {
         && bytes[bytes.len() - 1] == 0xD9
 }
 
-pub(crate) fn detect_polygon_on_jpeg_linux(jpeg_bytes: &[u8]) -> Option<Vec<PolygonPoint>> {
+/// Fast single-pass document detection for real-time preview.
+///
+/// Pipeline (optimized for speed, targets A4 paper):
+///   1. Decode JPEG → downscale to ≤480p
+///   2. Grayscale → GaussianBlur(5×5)
+///   3. Canny edge detection (dual threshold)
+///   4. Dilate to close small gaps in edges
+///   5. findContours → sort by area → approxPolyDP for 4-point quad
+///   6. Validate: convex, reasonable area, near-rectangular angles
+///
+/// Returns normalized [0,1] polygon or None.
+pub(crate) fn detect_document_fast(jpeg_bytes: &[u8]) -> Option<Vec<PolygonPoint>> {
     let input = Vector::<u8>::from_slice(jpeg_bytes);
     let color_full = imgcodecs::imdecode(&input, imgcodecs::IMREAD_COLOR).ok()?;
     if color_full.empty() {
         return None;
     }
-    let full_width = color_full.cols();
-    let full_height = color_full.rows();
-    if full_width < 12 || full_height < 12 {
+    let full_w = color_full.cols();
+    let full_h = color_full.rows();
+    if full_w < 20 || full_h < 20 {
         return None;
     }
-    let mut color = Mat::default();
-    let max_dim = 960_i32;
-    let max_side = full_width.max(full_height);
-    if max_side > max_dim {
+    // Downscale to ≤480p for speed.
+    let max_dim = 480_i32;
+    let max_side = full_w.max(full_h);
+    let color = if max_side > max_dim {
         let ratio = f64::from(max_dim) / f64::from(max_side);
-        let scaled_width = (f64::from(full_width) * ratio).round() as i32;
-        let scaled_height = (f64::from(full_height) * ratio).round() as i32;
+        let sw = (f64::from(full_w) * ratio).round() as i32;
+        let sh = (f64::from(full_h) * ratio).round() as i32;
+        let mut resized = Mat::default();
         imgproc::resize(
             &color_full,
-            &mut color,
-            Size::new(scaled_width.max(1), scaled_height.max(1)),
+            &mut resized,
+            Size::new(sw.max(1), sh.max(1)),
             0.0,
             0.0,
             imgproc::INTER_AREA,
         )
         .ok()?;
+        resized
     } else {
-        color = color_full;
-    }
-    let quad = detect_document_quad_opencv(&color)?;
-    let width_f = color.cols() as f32;
-    let height_f = color.rows() as f32;
-    if width_f <= 1.0 || height_f <= 1.0 {
-        return None;
-    }
-    let mut points = Vec::with_capacity(4);
-    for p in quad {
-        points.push(PolygonPoint {
-            x: (p.x as f32 / width_f).clamp(0.0, 1.0),
-            y: (p.y as f32 / height_f).clamp(0.0, 1.0),
-        });
-    }
-    Some(points)
-}
-
-fn detect_document_quad_opencv(color: &Mat) -> Option<[PointI; 4]> {
-    let width = color.cols();
-    let height = color.rows();
-    if width < 20 || height < 20 {
-        return None;
-    }
-    let image_area = f64::from(width * height);
-    let mut best: Option<([PointI; 4], f64)> = None;
-    let mut reduced = Mat::default();
-    let mut smoothed = Mat::default();
-    let reduced_size = Size::new((width / 2).max(1), (height / 2).max(1));
-    imgproc::pyr_down(color, &mut reduced, reduced_size, core::BORDER_DEFAULT).ok()?;
-    imgproc::pyr_up(
-        &reduced,
-        &mut smoothed,
-        Size::new(width, height),
-        core::BORDER_DEFAULT,
-    )
-    .ok()?;
-    let source = if smoothed.empty() {
-        color.try_clone().ok()?
-    } else {
-        smoothed
+        color_full
     };
-    if let Some((quad, score)) =
-        find_best_quad_from_squares_like(&source, width, height, image_area)
-    {
-        best = Some((quad, score));
-    }
-    if let Some((quad, score)) = find_best_quad_from_hsv_white(&source, width, height, image_area) {
-        best = pick_better(best, (quad, score));
-    }
+    let w = color.cols();
+    let h = color.rows();
+    let image_area = f64::from(w * h);
+
+    // Grayscale + blur
     let mut gray = Mat::default();
-    imgproc::cvt_color(&source, &mut gray, imgproc::COLOR_BGR2GRAY, 0).ok()?;
-    let mut normalized = Mat::default();
-    imgproc::equalize_hist(&gray, &mut normalized).ok()?;
+    imgproc::cvt_color(&color, &mut gray, imgproc::COLOR_BGR2GRAY, 0).ok()?;
     let mut blurred = Mat::default();
     imgproc::gaussian_blur(
-        &normalized,
+        &gray,
         &mut blurred,
         Size::new(5, 5),
         0.0,
@@ -110,93 +78,45 @@ fn detect_document_quad_opencv(color: &Mat) -> Option<[PointI; 4]> {
         core::BORDER_DEFAULT,
     )
     .ok()?;
-    let mut edges = Mat::default();
-    imgproc::canny(&blurred, &mut edges, 35.0, 120.0, 3, false).ok()?;
-    if let Some((quad, score)) =
-        find_best_quad_from_binary(&edges, width, height, image_area, 1.0, 1)
-    {
-        best = pick_better(best, (quad, score));
-    }
-    let mut adaptive_inv = Mat::default();
-    imgproc::adaptive_threshold(
-        &blurred,
-        &mut adaptive_inv,
-        255.0,
-        imgproc::ADAPTIVE_THRESH_GAUSSIAN_C,
-        imgproc::THRESH_BINARY_INV,
-        31,
-        7.0,
-    )
-    .ok()?;
-    if let Some((quad, score)) =
-        find_best_quad_from_binary(&adaptive_inv, width, height, image_area, 1.02, 2)
-    {
-        best = pick_better(best, (quad, score));
-    }
-    let mut otsu_inv = Mat::default();
-    imgproc::threshold(
-        &blurred,
-        &mut otsu_inv,
-        0.0,
-        255.0,
-        imgproc::THRESH_BINARY_INV | imgproc::THRESH_OTSU,
-    )
-    .ok()?;
-    if let Some((quad, score)) =
-        find_best_quad_from_binary(&otsu_inv, width, height, image_area, 0.98, 1)
-    {
-        best = pick_better(best, (quad, score));
-    }
-    best.map(|(quad, _)| quad)
-}
 
-fn find_best_quad_from_squares_like(
-    color: &Mat,
-    width: i32,
-    height: i32,
-    image_area: f64,
-) -> Option<([PointI; 4], f64)> {
-    let mut channels = Vector::<Mat>::new();
-    core::split(color, &mut channels).ok()?;
+    // Try two Canny threshold pairs: one for high-contrast edges, one for softer edges.
     let mut best: Option<([PointI; 4], f64)> = None;
-    let levels = 8_i32;
-    for ci in 0..channels.len() {
-        let channel = channels.get(ci).ok()?;
-        for level in 0..levels {
-            let mut binary = Mat::default();
-            if level == 0 {
-                imgproc::canny(&channel, &mut binary, 0.0, 60.0, 5, false).ok()?;
-                let mut dilated = Mat::default();
-                imgproc::dilate(
-                    &binary,
-                    &mut dilated,
-                    &Mat::default(),
-                    Point::new(-1, -1),
-                    1,
-                    core::BORDER_CONSTANT,
-                    Scalar::all(0.0),
-                )
-                .ok()?;
-                binary = dilated;
-            } else {
-                let threshold = f64::from((level + 1) * 255 / levels);
-                imgproc::threshold(
-                    &channel,
-                    &mut binary,
-                    threshold,
-                    255.0,
-                    imgproc::THRESH_BINARY,
-                )
-                .ok()?;
-            }
-            if let Some((quad, score)) =
-                find_best_quad_from_binary(&binary, width, height, image_area, 1.03, 1)
-            {
-                best = pick_better(best, (quad, score));
-            }
+    for (lo, hi) in [(50.0, 150.0), (30.0, 90.0)] {
+        let mut edges = Mat::default();
+        imgproc::canny(&blurred, &mut edges, lo, hi, 3, false).ok()?;
+        // Dilate to bridge small gaps in document edges.
+        let mut dilated = Mat::default();
+        imgproc::dilate(
+            &edges,
+            &mut dilated,
+            &Mat::default(),
+            Point::new(-1, -1),
+            2,
+            core::BORDER_CONSTANT,
+            Scalar::all(0.0),
+        )
+        .ok()?;
+        if let Some(candidate) = find_best_quad_from_binary(&dilated, w, h, image_area, 1.0, 0) {
+            best = pick_better(best, candidate);
         }
     }
-    best
+
+    // Also try HSV white-paper mask (very effective for white A4 on colored backgrounds).
+    if let Some(candidate) = find_best_quad_from_hsv_white(&color, w, h, image_area) {
+        best = pick_better(best, candidate);
+    }
+
+    let quad = best?.0;
+    let wf = w as f32;
+    let hf = h as f32;
+    let mut points = Vec::with_capacity(4);
+    for p in quad {
+        points.push(PolygonPoint {
+            x: (p.x as f32 / wf).clamp(0.0, 1.0),
+            y: (p.y as f32 / hf).clamp(0.0, 1.0),
+        });
+    }
+    Some(points)
 }
 
 fn find_best_quad_from_hsv_white(

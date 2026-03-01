@@ -48,6 +48,7 @@ export function useCameraScanner() {
 
   const { clearTimer, startPreviewLoops, captureOnce, resetInFlight } = useFrameCapture(
     frameUrl,
+    framePolygon,
     isRunning,
     isPaused,
     errorMessage,

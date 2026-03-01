@@ -22,10 +22,6 @@ export async function captureFrame(): Promise<CaptureFrameResponse> {
   return invoke<CaptureFrameResponse>("capture_frame");
 }
 
-export async function updatePolygonDetection(): Promise<PolygonPoint[]> {
-  return invoke<PolygonPoint[]>("update_polygon_detection");
-}
-
 export async function rectifySnapshot(request: {
   frameDataUrl: string;
   polygon: PolygonPoint[];
