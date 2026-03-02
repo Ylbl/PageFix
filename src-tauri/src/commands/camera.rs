@@ -1,4 +1,4 @@
-use crate::models::{CameraConfig, CameraDevice, CaptureFrameResponse, StartCameraRequest};
+use crate::models::{CameraConfig, CameraDevice, CaptureFrameResponse, DetectionWeights, StartCameraRequest};
 use crate::state::CameraState;
 use tauri::State;
 
@@ -117,8 +117,19 @@ pub(crate) fn capture_frame(state: State<CameraState>) -> Result<CaptureFrameRes
             session.last_frame_jpeg = frame_bytes.clone();
             frame_bytes
         };
+        // Get detection weights.
+        let weights = state
+            .detection_weights
+            .lock()
+            .map_err(|_| "权重状态锁失败。".to_string())?
+            .clone();
         // Run fast detection outside the lock so we don't block camera capture.
-        let polygon = crate::vision::detect_document_fast(&frame_bytes).unwrap_or_default();
+        let polygon = crate::vision::detect_document_fast(
+            &frame_bytes,
+            weights.canny,
+            weights.hsv,
+        )
+        .unwrap_or_default();
         // Store the detected polygon back into session state.
         if let Ok(mut guard) = state.current.lock() {
             if let Some(session) = guard.as_mut() {
@@ -135,4 +146,17 @@ pub(crate) fn capture_frame(state: State<CameraState>) -> Result<CaptureFrameRes
     {
         Err("当前 demo 仅实现了 Linux 摄像头采集。".into())
     }
+}
+
+#[tauri::command]
+pub(crate) fn update_detection_weights(
+    state: State<CameraState>,
+    weights: DetectionWeights,
+) -> Result<(), String> {
+    let mut guard = state
+        .detection_weights
+        .lock()
+        .map_err(|_| "权重状态锁失败。".to_string())?;
+    *guard = weights;
+    Ok(())
 }

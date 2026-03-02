@@ -4,8 +4,9 @@ import {
   PREVIEW_MAX_WIDTH_PX,
   RESOLUTION_OPTIONS,
 } from "../constants";
-import type { PolygonPoint, PostProcessMode } from "../types";
+import type { DetectionWeights, PolygonPoint, PostProcessMode } from "../types";
 import { polygonPointsForSvg, polygonSegments } from "../utils";
+import { updateDetectionWeights } from "../api";
 import { useDeviceManager } from "./useDeviceManager";
 import { useFrameCapture } from "./useFrameCapture";
 import { useImageRotation } from "./useImageRotation";
@@ -23,9 +24,18 @@ export function useCameraScanner() {
   const isPaused = ref(false);
   const isRectifying = ref(false);
   const postProcessMode = ref<PostProcessMode>("sharpen");
+  const detectionWeights = ref<DetectionWeights>({ canny: 0.5, hsv: 1.0 });
   const previewSvgRef = ref<SVGSVGElement | null>(null);
   const livePreviewRef = ref<HTMLElement | null>(null);
   const capturePreviewRef = ref<HTMLElement | null>(null);
+
+  async function onWeightsUpdate() {
+    try {
+      await updateDetectionWeights(detectionWeights.value);
+    } catch (error) {
+      console.error("更新权重失败:", error);
+    }
+  }
 
   const livePanZoom = usePanZoom({
     containerRef: livePreviewRef,
@@ -141,6 +151,7 @@ export function useCameraScanner() {
     selectedResolution,
     fps,
     postProcessMode,
+    detectionWeights,
     frameUrl,
     framePolygon,
     capturedFrameUrl,
@@ -167,6 +178,7 @@ export function useCameraScanner() {
     rectifySnapshot,
     rotateCapturedLeft,
     rotateCapturedRight,
+    onWeightsUpdate,
     polygonSegments,
     polygonPointsForSvg,
     startDragVertex,

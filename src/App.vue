@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useCameraScanner } from "./features/camera/composables/useCameraScanner";
 import CameraControls from "./features/camera/components/CameraControls.vue";
+import DetectionWeights from "./features/camera/components/DetectionWeights.vue";
 import LivePreview from "./features/camera/components/LivePreview.vue";
 import CapturedPreview from "./features/camera/components/CapturedPreview.vue";
 
@@ -12,6 +13,7 @@ const {
   selectedResolution,
   fps,
   postProcessMode,
+  detectionWeights,
   frameUrl,
   framePolygon,
   capturedFrameUrl,
@@ -38,6 +40,7 @@ const {
   rectifySnapshot,
   rotateCapturedLeft,
   rotateCapturedRight,
+  onWeightsUpdate,
   startDragVertex,
   insertVertexOnSegment,
   removeVertex,
@@ -75,6 +78,8 @@ const {
       @toggle-snapshot-resume="toggleSnapshotResume"
       @rectify-snapshot="rectifySnapshot"
     />
+
+    <DetectionWeights v-model:weights="detectionWeights" @update="onWeightsUpdate" />
 
     <p v-if="errorMessage" class="error-message">{{ errorMessage }}</p>
     <p v-if="isRunning && isPaused" class="status-message">预览已暂停，请在上方窗口拖拽顶点后点击"矫正"。</p>

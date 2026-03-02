@@ -19,6 +19,12 @@ export type CaptureFrameResponse = {
 // Post-processing choices executed in Rust after perspective correction.
 export type PostProcessMode = "none" | "sharpen";
 
+// Detection pipeline weights for tuning.
+export type DetectionWeights = {
+  canny: number;
+  hsv: number;
+};
+
 // Select-option model for capture resolutions.
 export type ResolutionOption = {
   value: string;

@@ -31,6 +31,22 @@ pub(crate) struct PolygonPoint {
     pub(crate) y: f32,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DetectionWeights {
+    pub(crate) canny: f64,
+    pub(crate) hsv: f64,
+}
+
+impl Default for DetectionWeights {
+    fn default() -> Self {
+        Self {
+            canny: 0.5,
+            hsv: 1.0,
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CaptureFrameResponse {

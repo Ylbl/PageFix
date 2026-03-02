@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { CameraDevice, CaptureFrameResponse, PolygonPoint, PostProcessMode } from "./types";
+import type { CameraDevice, CaptureFrameResponse, DetectionWeights, PolygonPoint, PostProcessMode } from "./types";
 
 export async function listCameras(): Promise<CameraDevice[]> {
   return invoke<CameraDevice[]>("list_cameras");
@@ -20,6 +20,10 @@ export async function stopCamera(): Promise<void> {
 
 export async function captureFrame(): Promise<CaptureFrameResponse> {
   return invoke<CaptureFrameResponse>("capture_frame");
+}
+
+export async function updateDetectionWeights(weights: DetectionWeights): Promise<void> {
+  return invoke("update_detection_weights", { weights });
 }
 
 export async function rectifySnapshot(request: {

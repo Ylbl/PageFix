@@ -29,7 +29,11 @@ pub(crate) fn looks_like_jpeg(bytes: &[u8]) -> bool {
 ///   6. Validate: convex, reasonable area, near-rectangular angles
 ///
 /// Returns normalized [0,1] polygon or None.
-pub(crate) fn detect_document_fast(jpeg_bytes: &[u8]) -> Option<Vec<PolygonPoint>> {
+pub(crate) fn detect_document_fast(
+    jpeg_bytes: &[u8],
+    canny_weight: f64,
+    hsv_weight: f64,
+) -> Option<Vec<PolygonPoint>> {
     let input = Vector::<u8>::from_slice(jpeg_bytes);
     let color_full = imgcodecs::imdecode(&input, imgcodecs::IMREAD_COLOR).ok()?;
     if color_full.empty() {
@@ -40,7 +44,7 @@ pub(crate) fn detect_document_fast(jpeg_bytes: &[u8]) -> Option<Vec<PolygonPoint
     if full_w < 20 || full_h < 20 {
         return None;
     }
-    // Downscale to ≤480p for speed.
+    // Downscale to ≤480p for speed (edge detection and HSV).
     let max_dim = 480_i32;
     let max_side = full_w.max(full_h);
     let color = if max_side > max_dim {
@@ -59,13 +63,13 @@ pub(crate) fn detect_document_fast(jpeg_bytes: &[u8]) -> Option<Vec<PolygonPoint
         .ok()?;
         resized
     } else {
-        color_full
+        color_full.try_clone().ok()?
     };
     let w = color.cols();
     let h = color.rows();
     let image_area = f64::from(w * h);
 
-    // Grayscale + blur
+    // Grayscale + blur for edge detection.
     let mut gray = Mat::default();
     imgproc::cvt_color(&color, &mut gray, imgproc::COLOR_BGR2GRAY, 0).ok()?;
     let mut blurred = Mat::default();
@@ -96,13 +100,13 @@ pub(crate) fn detect_document_fast(jpeg_bytes: &[u8]) -> Option<Vec<PolygonPoint
             Scalar::all(0.0),
         )
         .ok()?;
-        if let Some(candidate) = find_best_quad_from_binary(&dilated, w, h, image_area, 1.0, 0) {
+        if let Some(candidate) = find_best_quad_from_binary(&dilated, w, h, image_area, canny_weight, 0) {
             best = pick_better(best, candidate);
         }
     }
 
     // Also try HSV white-paper mask (very effective for white A4 on colored backgrounds).
-    if let Some(candidate) = find_best_quad_from_hsv_white(&color, w, h, image_area) {
+    if let Some(candidate) = find_best_quad_from_hsv_white(&color, w, h, image_area, hsv_weight) {
         best = pick_better(best, candidate);
     }
 
@@ -119,23 +123,62 @@ pub(crate) fn detect_document_fast(jpeg_bytes: &[u8]) -> Option<Vec<PolygonPoint
     Some(points)
 }
 
+/// Detect dark text/ink regions and compute the minimum bounding rectangle.
+///
+/// This is the fallback for white-paper-on-white-background where edge detection
+/// fails. The pipeline:
+///   1. OTSU threshold (inverted) to isolate dark text as white pixels
+///   2. Moderate dilation to merge characters → text blocks
+///   3. Collect all qualifying contour points into one set
+///   4. minAreaRect on the combined points → document bounding quad
+
 fn find_best_quad_from_hsv_white(
     color: &Mat,
     width: i32,
     height: i32,
     image_area: f64,
+    weight: f64,
 ) -> Option<([PointI; 4], f64)> {
     let mut hsv = Mat::default();
     imgproc::cvt_color(color, &mut hsv, imgproc::COLOR_BGR2HSV, 0).ok()?;
-    let mut white_mask = Mat::default();
-    core::in_range(
-        &hsv,
-        &Scalar::new(0.0, 0.0, 105.0, 0.0),
-        &Scalar::new(180.0, 100.0, 255.0, 0.0),
-        &mut white_mask,
+
+    // Extract V channel (brightness).
+    let mut channels = Vector::<Mat>::new();
+    core::split(&hsv, &mut channels).ok()?;
+    let v_channel = channels.get(2).ok()?;
+
+    // Find the brightest regions (top 20% brightness).
+    let mut bright_mask = Mat::default();
+    imgproc::threshold(
+        &v_channel,
+        &mut bright_mask,
+        0.0,
+        255.0,
+        imgproc::THRESH_BINARY | imgproc::THRESH_OTSU,
     )
     .ok()?;
-    find_best_quad_from_binary(&white_mask, width, height, image_area, 1.08, 2)
+
+    // Apply morphological close to fill gaps, then open to remove noise.
+    let kernel = imgproc::get_structuring_element(
+        imgproc::MORPH_RECT,
+        Size::new(5, 5),
+        Point::new(-1, -1),
+    )
+    .ok()?;
+    let mut closed = Mat::default();
+    imgproc::morphology_ex(
+        &bright_mask,
+        &mut closed,
+        imgproc::MORPH_CLOSE,
+        &kernel,
+        Point::new(-1, -1),
+        2,
+        core::BORDER_CONSTANT,
+        Scalar::all(0.0),
+    )
+    .ok()?;
+
+    find_best_quad_from_binary(&closed, width, height, image_area, weight, 1)
 }
 
 fn find_best_quad_from_binary(

@@ -18,6 +18,7 @@ pub fn run() {
             commands::camera::set_camera,
             commands::camera::capture_frame,
             commands::camera::stop_camera,
+            commands::camera::update_detection_weights,
             commands::vision::rectify_snapshot
         ])
         .run(tauri::generate_context!())

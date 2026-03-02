@@ -2,6 +2,7 @@ use std::sync::Mutex;
 
 #[cfg(target_os = "linux")]
 use crate::models::PolygonPoint;
+use crate::models::DetectionWeights;
 
 #[cfg(target_os = "linux")]
 pub(crate) struct LinuxCameraSession {
@@ -15,12 +16,14 @@ pub(crate) struct CameraState {
     pub(crate) current: Mutex<Option<LinuxCameraSession>>,
     #[cfg(not(target_os = "linux"))]
     pub(crate) current: Mutex<Option<crate::models::CameraConfig>>,
+    pub(crate) detection_weights: Mutex<DetectionWeights>,
 }
 
 impl Default for CameraState {
     fn default() -> Self {
         Self {
             current: Mutex::new(None),
+            detection_weights: Mutex::new(DetectionWeights::default()),
         }
     }
 }
